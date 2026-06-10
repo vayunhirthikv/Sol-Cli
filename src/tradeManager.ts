@@ -16,6 +16,7 @@ export interface OpenTrade {
 }
 
 export const activeTrades = new Map<string, OpenTrade>();
+export const pendingEntries = new Set<string>();
 export let totalRealizedPnL = 0;
 export let totalFeesUsd = 0;
 export let walletBalanceSol = 0;
@@ -75,7 +76,7 @@ export function loadSessionStats() {
       if (CONFIG.PAPER_TRADE) {
         walletBalanceSol = data.simulatedBalanceSol !== undefined ? data.simulatedBalanceSol : 10.0;
       }
-      logger.info('MANAGER', `Loaded session stats: Realized PnL: $${totalRealizedPnL.toFixed(2)}, Fees: $${totalFeesUsd.toFixed(2)}, Session Realized PnL: $${sessionRealizedPnL.toFixed(2)}, Balance: ${walletBalanceSol.toFixed(4)} SOL`);
+      logger.info('MANAGER', `Loaded stats: Realise: $${sessionRealizedPnL.toFixed(2)}, Fee: $${totalFeesUsd.toFixed(2)}, Total PnL (incl. fee): $${(totalRealizedPnL - totalFeesUsd).toFixed(2)}, Balance: ${walletBalanceSol.toFixed(4)} SOL`);
     } catch (e: any) {
       logger.error('MANAGER', `Failed to load session stats: ${e.message}`);
     }
@@ -103,48 +104,66 @@ refreshWalletBalance();
 setInterval(refreshWalletBalance, 5000);
 
 export async function onTokenEntry(tokenAddress: string, priceUsd: number, entryLiquidityUsd: number) {
-  if (activeTrades.has(tokenAddress)) return;
+  if (activeTrades.has(tokenAddress) || pendingEntries.has(tokenAddress)) return;
 
-  logger.info('MANAGER', `Entering Trade: ${tokenAddress}`);
-  
-  // 1. Execute Buy via RPCFast
-  const txHash = await executeBuy(tokenAddress, CONFIG.ENTRY_SIZE_USD);
-  if (!txHash) return;
-
-  // Track fee asynchronously in the background
-  getTransactionFeeUsd(txHash).then(fee => {
-    totalFeesUsd += fee;
-    if (CONFIG.PAPER_TRADE) {
-      const spentSol = (CONFIG.ENTRY_SIZE_USD + fee) / cachedSolPrice;
-      walletBalanceSol -= spentSol;
-    }
-    saveSessionStats();
-    checkGlobalLimits();
-  });
-
-  // Derive the exact amountRaw (mocked in paper trade, read on-chain in live trade)
-  let amountRaw = 0;
-  if (CONFIG.PAPER_TRADE) {
-    // Simulate raw amount assuming 6 decimals for simplicity
-    amountRaw = Math.floor((CONFIG.ENTRY_SIZE_USD / priceUsd) * 1e6);
-  } else {
-    amountRaw = await getWalletTokenBalance(tokenAddress);
-    if (amountRaw === 0) {
-      logger.error('MANAGER', `Failed to fetch on-chain token balance for ${tokenAddress}. Skipping trade tracking.`);
-      return;
-    }
+  if (activeTrades.size + pendingEntries.size >= CONFIG.MAX_ACTIVE_POSITIONS) {
+    logger.warn('MANAGER', `Max active positions limit reached (${CONFIG.MAX_ACTIVE_POSITIONS}). Skipping entry for ${tokenAddress}`);
+    return;
   }
 
-  activeTrades.set(tokenAddress, {
-    tokenAddress,
-    amountRaw,
-    entryPriceUsd: priceUsd,
-    currentPriceUsd: priceUsd,
-    openedAt: Date.now(),
-    entryLiquidityUsd,
-    currentLiquidityUsd: entryLiquidityUsd,
-  });
-  saveActiveTrades();
+  // Reserve position space immediately to avoid parallel race condition
+  pendingEntries.add(tokenAddress);
+
+  try {
+    logger.info('MANAGER', `Entering Trade: ${tokenAddress}`);
+    
+    // 1. Execute Buy via RPCFast
+    const txHash = await executeBuy(tokenAddress, CONFIG.ENTRY_SIZE_USD);
+    if (!txHash) {
+      pendingEntries.delete(tokenAddress);
+      return;
+    }
+
+    // Track fee asynchronously in the background
+    getTransactionFeeUsd(txHash).then(fee => {
+      totalFeesUsd += fee;
+      if (CONFIG.PAPER_TRADE) {
+        const spentSol = (CONFIG.ENTRY_SIZE_USD + fee) / cachedSolPrice;
+        walletBalanceSol -= spentSol;
+      }
+      saveSessionStats();
+      checkGlobalLimits();
+    });
+
+    // Derive the exact amountRaw (mocked in paper trade, read on-chain in live trade)
+    let amountRaw = 0;
+    if (CONFIG.PAPER_TRADE) {
+      // Simulate raw amount assuming 6 decimals for simplicity
+      amountRaw = Math.floor((CONFIG.ENTRY_SIZE_USD / priceUsd) * 1e6);
+    } else {
+      amountRaw = await getWalletTokenBalance(tokenAddress);
+      if (amountRaw === 0) {
+        logger.error('MANAGER', `Failed to fetch on-chain token balance for ${tokenAddress}. Skipping trade tracking.`);
+        pendingEntries.delete(tokenAddress);
+        return;
+      }
+    }
+
+    activeTrades.set(tokenAddress, {
+      tokenAddress,
+      amountRaw,
+      entryPriceUsd: priceUsd,
+      currentPriceUsd: priceUsd,
+      openedAt: Date.now(),
+      entryLiquidityUsd,
+      currentLiquidityUsd: entryLiquidityUsd,
+    });
+    saveActiveTrades();
+  } catch (err: any) {
+    logger.error('MANAGER', `Error entering trade for ${tokenAddress}: ${err.message}`);
+  } finally {
+    pendingEntries.delete(tokenAddress);
+  }
 }
 
 let lastDexScreenerPoll = 0;
@@ -153,7 +172,7 @@ const missingTicks = new Map<string, number>();
 // Price tracking via Jupiter API (with DexScreener fallback)
 setInterval(async () => {
   if (activeTrades.size === 0) {
-    updatePinnedDashboard([], totalRealizedPnL, totalFeesUsd, walletBalanceSol);
+    updatePinnedDashboard([], totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
     return;
   }
 
@@ -298,28 +317,28 @@ export async function checkGlobalLimits() {
     });
   }
 
-  // Update pinned dashboard feed
-  updatePinnedDashboard(tradesArray, totalRealizedPnL, totalFeesUsd, walletBalanceSol);
+  // Update pinned dashboard feed (with both total and session realized PnL)
+  updatePinnedDashboard(tradesArray, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
 
   // Rolling Session Net P&L: includes open unrealized P&L + active session realized P&L
   const sessionNetPnlUsd = totalUnrealizedUsd + sessionRealizedPnL;
 
   if (sessionNetPnlUsd >= CONFIG.GLOBAL_TP_USD) {
-    logger.success('MANAGER', `[TP HIT] Global Take Profit ($${CONFIG.GLOBAL_TP_USD}) HIT! (Gross Session PnL: $${sessionNetPnlUsd.toFixed(2)}) Mass closing...`);
+    logger.success('MANAGER', `[TP HIT] Global Take Profit ($${CONFIG.GLOBAL_TP_USD}) HIT! (Net PnL: $${sessionNetPnlUsd.toFixed(2)}) Mass closing...`);
     await massCloseAll();
     
-    // Reset session P&L back to $0 (Accumulated Realized and Fees remain intact)
+    // Reset unrealize, realise, and net back to $0 on hit
     sessionRealizedPnL = 0;
     saveSessionStats();
-    logger.info('MANAGER', 'Reset rolling session gross P&L back to $0 after Take Profit hit.');
+    logger.info('MANAGER', 'Reset Unrealize, Realise, and Net P&L to $0 after Take Profit hit.');
   } else if (sessionNetPnlUsd <= -CONFIG.GLOBAL_SL_USD) {
-    logger.alert('MANAGER', `[SL HIT] Global Stop Loss ($${CONFIG.GLOBAL_SL_USD}) HIT! (Gross Session PnL: $${sessionNetPnlUsd.toFixed(2)}) Mass closing...`);
+    logger.alert('MANAGER', `[SL HIT] Global Stop Loss ($${CONFIG.GLOBAL_SL_USD}) HIT! (Net PnL: $${sessionNetPnlUsd.toFixed(2)}) Mass closing...`);
     await massCloseAll();
     
-    // Reset session P&L back to $0 (Accumulated Realized and Fees remain intact)
+    // Reset unrealize, realise, and net back to $0 on hit
     sessionRealizedPnL = 0;
     saveSessionStats();
-    logger.info('MANAGER', 'Reset rolling session gross P&L back to $0 after Stop Loss hit.');
+    logger.info('MANAGER', 'Reset Unrealize, Realise, and Net P&L to $0 after Stop Loss hit.');
   }
 }
 
@@ -463,5 +482,5 @@ export async function massCloseAll() {
     entryPriceUsd: t.entryPriceUsd,
     currentPriceUsd: t.currentPriceUsd,
   }));
-  updatePinnedDashboard(remainingTrades, totalRealizedPnL, totalFeesUsd, walletBalanceSol);
+  updatePinnedDashboard(remainingTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
 }

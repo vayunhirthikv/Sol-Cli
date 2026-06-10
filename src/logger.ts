@@ -58,36 +58,43 @@ export function reprintPinnedBlock() {
 }
 
 /**
- * Updates the pinned active positions and session P&L summary
+ * Updates the pinned active positions and P&L summary
  */
 export function updatePinnedDashboard(
   trades: PinnedTradeInfo[],
   realizedUsd: number,
+  sessionRealizedUsd: number,
   totalFeesUsd: number,
   walletBalanceSol: number
 ) {
-  let totalUnrealizedUsd = 0;
+  let unrealize = 0;
   
   for (const trade of trades) {
     const entryValue = CONFIG.ENTRY_SIZE_USD;
     const currentValue = (trade.currentPriceUsd / trade.entryPriceUsd) * entryValue;
-    totalUnrealizedUsd += (currentValue - entryValue);
+    unrealize += (currentValue - entryValue);
   }
   
-  const netPnlUsd = totalUnrealizedUsd + realizedUsd;
-  const realPnlUsd = netPnlUsd - totalFeesUsd;
+  const realise = sessionRealizedUsd;
+  const net = unrealize + realise;
+  const fee = totalFeesUsd;
+  const totalPnL = realizedUsd + unrealize - totalFeesUsd;
   
-  const unrealizedColor = totalUnrealizedUsd >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
-  const unrealizedSign = totalUnrealizedUsd >= 0 ? '+' : '';
-  const realizedColor = realizedUsd >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
-  const realizedSign = realizedUsd >= 0 ? '+' : '';
-  const netColor = netPnlUsd >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
-  const netSign = netPnlUsd >= 0 ? '+' : '';
-  const realColor = realPnlUsd >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
-  const realSign = realPnlUsd >= 0 ? '+' : '';
+  const unrealizeColor = unrealize >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+  const unrealizeSign = unrealize >= 0 ? '+' : '';
+  
+  const realiseColor = realise >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+  const realiseSign = realise >= 0 ? '+' : '';
+  
+  const netColor = net >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+  const netSign = net >= 0 ? '+' : '';
+  
   const feeColor = COLORS.YELLOW;
   
-  const text = `${COLORS.CYAN}[PNL]${COLORS.RESET} Open: ${COLORS.WHITE}${trades.length}${COLORS.RESET} | Unrealized: ${unrealizedColor}${unrealizedSign}$${totalUnrealizedUsd.toFixed(2)}${COLORS.RESET} | Realized: ${realizedColor}${realizedSign}$${realizedUsd.toFixed(2)}${COLORS.RESET} | Net: ${netColor}${netSign}$${netPnlUsd.toFixed(2)}${COLORS.RESET} | Real: ${realColor}${realSign}$${realPnlUsd.toFixed(2)}${COLORS.RESET} | Fee: ${feeColor}$${totalFeesUsd.toFixed(2)}${COLORS.RESET} | Balance: ${COLORS.BRIGHT_YELLOW}${walletBalanceSol.toFixed(4)} SOL${COLORS.RESET}\n`;
+  const totalColor = totalPnL >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+  const totalSign = totalPnL >= 0 ? '+' : '';
+  
+  const text = `Open: ${COLORS.WHITE}${trades.length}${COLORS.RESET} | Unrealize: ${unrealizeColor}${unrealizeSign}$${unrealize.toFixed(2)}${COLORS.RESET} | Realise: ${realiseColor}${realiseSign}$${realise.toFixed(2)}${COLORS.RESET} | Net: ${netColor}${netSign}$${net.toFixed(2)}${COLORS.RESET} | Fee: ${feeColor}$${fee.toFixed(2)}${COLORS.RESET} | Total PnL: ${totalColor}${totalSign}$${totalPnL.toFixed(2)}${COLORS.RESET} | Balance: ${COLORS.BRIGHT_YELLOW}${walletBalanceSol.toFixed(4)} SOL${COLORS.RESET}\n`;
   
   currentPinnedBlockText = text;
   reprintPinnedBlock();
