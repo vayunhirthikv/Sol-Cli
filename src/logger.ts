@@ -66,7 +66,9 @@ export function updatePinnedDashboard(
   realizedUsd: number,
   sessionRealizedUsd: number,
   totalFeesUsd: number,
-  walletBalanceSol: number
+  walletBalanceSol: number,
+  highestTotalPnL: number,
+  lowestTotalPnL: number
 ) {
   let unrealize = 0;
   
@@ -94,6 +96,12 @@ export function updatePinnedDashboard(
   
   const totalColor = totalPnL >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
   const totalSign = totalPnL >= 0 ? '+' : '';
+
+  const highColor = highestTotalPnL >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+  const highSign = highestTotalPnL >= 0 ? '+' : '';
+
+  const lowColor = lowestTotalPnL >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+  const lowSign = lowestTotalPnL >= 0 ? '+' : '';
   
   // Format dynamic active positions list showing deviation (high / low)
   let positionsList = '';
@@ -148,7 +156,7 @@ export function updatePinnedDashboard(
     divider = `${COLORS.CYAN}------------------------${COLORS.RESET}\n`;
   }
 
-  const text = `${positionsList}${closedList}${divider}Open: ${COLORS.WHITE}${trades.length}${COLORS.RESET} | Unrealize: ${unrealizeColor}${unrealizeSign}$${unrealize.toFixed(2)}${COLORS.RESET} | Realise: ${realiseColor}${realiseSign}$${realise.toFixed(2)}${COLORS.RESET} | Net: ${netColor}${netSign}$${net.toFixed(2)}${COLORS.RESET} | Fee: ${feeColor}$${fee.toFixed(2)}${COLORS.RESET} | Total PnL: ${totalColor}${totalSign}$${totalPnL.toFixed(2)}${COLORS.RESET} | Balance: ${COLORS.BRIGHT_YELLOW}${walletBalanceSol.toFixed(4)} SOL${COLORS.RESET}\n`;
+  const text = `${positionsList}${closedList}${divider}Open: ${COLORS.WHITE}${trades.length}${COLORS.RESET} | Unrealize: ${unrealizeColor}${unrealizeSign}$${unrealize.toFixed(2)}${COLORS.RESET} | Realise: ${realiseColor}${realiseSign}$${realise.toFixed(2)}${COLORS.RESET} | Net: ${netColor}${netSign}$${net.toFixed(2)}${COLORS.RESET} | Fee: ${feeColor}$${fee.toFixed(2)}${COLORS.RESET} | Total PnL: ${totalColor}${totalSign}$${totalPnL.toFixed(2)}${COLORS.RESET} | High: ${highColor}${highSign}$${highestTotalPnL.toFixed(2)}${COLORS.RESET} | Low: ${lowColor}${lowSign}$${lowestTotalPnL.toFixed(2)}${COLORS.RESET} | Balance: ${COLORS.BRIGHT_YELLOW}${walletBalanceSol.toFixed(4)} SOL${COLORS.RESET}\n`;
   
   currentPinnedBlockText = text;
   reprintPinnedBlock();

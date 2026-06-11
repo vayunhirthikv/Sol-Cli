@@ -25,6 +25,8 @@ export let totalFeesUsd = 0;
 export let walletBalanceSol = 0;
 export let sessionRealizedPnL = 0;
 export const recentClosedTrades: PinnedClosedTradeInfo[] = [];
+export let highestTotalPnL = 0;
+export let lowestTotalPnL = 0;
 
 const logFilePath = path.resolve(__dirname, '../trades.log');
 const activeTradesFilePath = path.resolve(__dirname, '../active_trades.json');
@@ -66,7 +68,9 @@ function saveSessionStats() {
       totalRealizedPnL,
       totalFeesUsd,
       simulatedBalanceSol: CONFIG.PAPER_TRADE ? walletBalanceSol : 10.0,
-      sessionRealizedPnL
+      sessionRealizedPnL,
+      highestTotalPnL,
+      lowestTotalPnL
     }, null, 2));
   } catch (err: any) {
     logger.error('MANAGER', `Failed to save session stats: ${err.message}`);
@@ -80,6 +84,8 @@ export function loadSessionStats() {
       totalRealizedPnL = data.totalRealizedPnL || 0;
       totalFeesUsd = data.totalFeesUsd || 0;
       sessionRealizedPnL = data.sessionRealizedPnL || 0;
+      highestTotalPnL = data.highestTotalPnL !== undefined ? data.highestTotalPnL : (totalRealizedPnL - totalFeesUsd);
+      lowestTotalPnL = data.lowestTotalPnL !== undefined ? data.lowestTotalPnL : (totalRealizedPnL - totalFeesUsd);
       if (CONFIG.PAPER_TRADE) {
         walletBalanceSol = data.simulatedBalanceSol !== undefined ? data.simulatedBalanceSol : 10.0;
       }
@@ -87,8 +93,12 @@ export function loadSessionStats() {
     } catch (e: any) {
       logger.error('MANAGER', `Failed to load session stats: ${e.message}`);
     }
-  } else if (CONFIG.PAPER_TRADE) {
-    walletBalanceSol = 10.0;
+  } else {
+    highestTotalPnL = 0;
+    lowestTotalPnL = 0;
+    if (CONFIG.PAPER_TRADE) {
+      walletBalanceSol = 10.0;
+    }
   }
 }
 
@@ -182,7 +192,16 @@ const missingTicks = new Map<string, number>();
 // Price tracking via Jupiter API (with DexScreener fallback)
 setInterval(async () => {
   if (activeTrades.size === 0) {
-    updatePinnedDashboard([], recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
+    const currentTotalPnL = totalRealizedPnL - totalFeesUsd;
+    if (currentTotalPnL > highestTotalPnL) {
+      highestTotalPnL = currentTotalPnL;
+      saveSessionStats();
+    }
+    if (currentTotalPnL < lowestTotalPnL) {
+      lowestTotalPnL = currentTotalPnL;
+      saveSessionStats();
+    }
+    updatePinnedDashboard([], recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol, highestTotalPnL, lowestTotalPnL);
     return;
   }
 
@@ -342,8 +361,19 @@ export async function checkGlobalLimits() {
     });
   }
 
+  // Update highest/lowest total PnL
+  const currentTotalPnL = totalRealizedPnL + totalUnrealizedUsd - totalFeesUsd;
+  if (currentTotalPnL > highestTotalPnL) {
+    highestTotalPnL = currentTotalPnL;
+    saveSessionStats();
+  }
+  if (currentTotalPnL < lowestTotalPnL) {
+    lowestTotalPnL = currentTotalPnL;
+    saveSessionStats();
+  }
+
   // Update pinned dashboard feed (with both total and session realized PnL)
-  updatePinnedDashboard(tradesArray, recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
+  updatePinnedDashboard(tradesArray, recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol, highestTotalPnL, lowestTotalPnL);
 
   // Rolling Session Net P&L: includes open unrealized P&L + active session realized P&L
   const sessionNetPnlUsd = totalUnrealizedUsd + sessionRealizedPnL;
@@ -538,5 +568,20 @@ export async function massCloseAll() {
     highestPriceUsd: t.highestPriceUsd || t.entryPriceUsd,
     lowestPriceUsd: t.lowestPriceUsd || t.entryPriceUsd,
   }));
-  updatePinnedDashboard(remainingTrades, recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
+  let totalUnrealizedUsd = 0;
+  for (const t of remainingTrades) {
+    const entryValue = CONFIG.ENTRY_SIZE_USD;
+    const currentValue = (t.currentPriceUsd / t.entryPriceUsd) * entryValue;
+    totalUnrealizedUsd += (currentValue - entryValue);
+  }
+  const currentTotalPnL = totalRealizedPnL + totalUnrealizedUsd - totalFeesUsd;
+  if (currentTotalPnL > highestTotalPnL) {
+    highestTotalPnL = currentTotalPnL;
+    saveSessionStats();
+  }
+  if (currentTotalPnL < lowestTotalPnL) {
+    lowestTotalPnL = currentTotalPnL;
+    saveSessionStats();
+  }
+  updatePinnedDashboard(remainingTrades, recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol, highestTotalPnL, lowestTotalPnL);
 }
