@@ -33,20 +33,8 @@ let currentPinnedBlockText = '';
  */
 export function reprintPinnedBlock() {
   if (lastPinnedLinesCount > 0) {
-    // Move cursor up by lastPinnedLinesCount lines to the top of the block
-    process.stdout.write(`\x1b[${lastPinnedLinesCount}A`);
-    
-    // Clear each line moving down without causing standard scroll
-    const totalLines = lastPinnedLinesCount + 1;
-    for (let i = 0; i < totalLines; i++) {
-      process.stdout.write('\r\x1b[K');
-      if (i < totalLines - 1) {
-        process.stdout.write('\x1b[1B'); // Move cursor down 1 line
-      }
-    }
-    
-    // Return cursor up to start of the cleared block
-    process.stdout.write(`\x1b[${lastPinnedLinesCount}A\r`);
+    // Move cursor up to the top of the block and clear everything below it
+    process.stdout.write(`\x1b[${lastPinnedLinesCount}A\r\x1b[J`);
   } else {
     // Just clear the current single line
     process.stdout.write('\r\x1b[K');
@@ -177,20 +165,8 @@ function getFormattedTime(): string {
  */
 export function log(message: string) {
   if (lastPinnedLinesCount > 0) {
-    // Move cursor up by lastPinnedLinesCount lines to the top of the block
-    process.stdout.write(`\x1b[${lastPinnedLinesCount}A`);
-    
-    // Clear each line moving down without causing standard scroll
-    const totalLines = lastPinnedLinesCount + 1;
-    for (let i = 0; i < totalLines; i++) {
-      process.stdout.write('\r\x1b[K');
-      if (i < totalLines - 1) {
-        process.stdout.write('\x1b[1B'); // Move cursor down 1 line
-      }
-    }
-    
-    // Return cursor up to start of the cleared block
-    process.stdout.write(`\x1b[${lastPinnedLinesCount}A\r`);
+    // Move cursor up to the top of the block and clear everything below it
+    process.stdout.write(`\x1b[${lastPinnedLinesCount}A\r\x1b[J`);
   } else {
     // Just clear the current single line
     process.stdout.write('\r\x1b[K');
