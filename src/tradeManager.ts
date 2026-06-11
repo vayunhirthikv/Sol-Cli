@@ -7,12 +7,15 @@ import axios from 'axios';
 
 export interface OpenTrade {
   tokenAddress: string;
+  tokenSymbol: string;
   amountRaw: number;
   entryPriceUsd: number;
   currentPriceUsd: number;
   openedAt: number;
   entryLiquidityUsd: number;
   currentLiquidityUsd: number;
+  highestPriceUsd: number;
+  lowestPriceUsd: number;
 }
 
 export const activeTrades = new Map<string, OpenTrade>();
@@ -44,6 +47,9 @@ export function loadActiveTrades() {
         trade.openedAt = trade.openedAt || Date.now();
         trade.entryLiquidityUsd = trade.entryLiquidityUsd || 0;
         trade.currentLiquidityUsd = trade.currentLiquidityUsd !== undefined ? trade.currentLiquidityUsd : (trade.entryLiquidityUsd || 0);
+        trade.tokenSymbol = trade.tokenSymbol || '';
+        trade.highestPriceUsd = trade.highestPriceUsd || trade.currentPriceUsd || trade.entryPriceUsd;
+        trade.lowestPriceUsd = trade.lowestPriceUsd || trade.currentPriceUsd || trade.entryPriceUsd;
         activeTrades.set(address, trade);
       }
       logger.info('MANAGER', `Loaded ${activeTrades.size} active trades from storage.`);
@@ -103,7 +109,7 @@ loadSessionStats();
 refreshWalletBalance();
 setInterval(refreshWalletBalance, 5000);
 
-export async function onTokenEntry(tokenAddress: string, priceUsd: number, entryLiquidityUsd: number) {
+export async function onTokenEntry(tokenAddress: string, symbol: string, priceUsd: number, entryLiquidityUsd: number) {
   if (activeTrades.has(tokenAddress) || pendingEntries.has(tokenAddress)) return;
 
   if (activeTrades.size + pendingEntries.size >= CONFIG.MAX_ACTIVE_POSITIONS) {
@@ -151,12 +157,15 @@ export async function onTokenEntry(tokenAddress: string, priceUsd: number, entry
 
     activeTrades.set(tokenAddress, {
       tokenAddress,
+      tokenSymbol: symbol,
       amountRaw,
       entryPriceUsd: priceUsd,
       currentPriceUsd: priceUsd,
       openedAt: Date.now(),
       entryLiquidityUsd,
       currentLiquidityUsd: entryLiquidityUsd,
+      highestPriceUsd: priceUsd,
+      lowestPriceUsd: priceUsd,
     });
     saveActiveTrades();
   } catch (err: any) {
@@ -194,7 +203,10 @@ setInterval(async () => {
       const trade = activeTrades.get(address);
       if (trade) {
         if (prices[address]?.price) {
-          trade.currentPriceUsd = parseFloat(prices[address].price);
+          const currentPrice = parseFloat(prices[address].price);
+          trade.currentPriceUsd = currentPrice;
+          if (currentPrice > trade.highestPriceUsd) trade.highestPriceUsd = currentPrice;
+          if (currentPrice < trade.lowestPriceUsd) trade.lowestPriceUsd = currentPrice;
           missingTicks.delete(address); // Reset missing counter
         } else {
           missingAddresses.push(address);
@@ -227,7 +239,10 @@ setInterval(async () => {
             trade.currentLiquidityUsd = pair.liquidity?.usd || 0;
             // Only update price from DexScreener if we didn't get it from Jupiter
             if (!prices[address]?.price) {
-              trade.currentPriceUsd = parseFloat(pair.priceUsd || '0');
+              const currentPrice = parseFloat(pair.priceUsd || '0');
+              trade.currentPriceUsd = currentPrice;
+              if (currentPrice > trade.highestPriceUsd) trade.highestPriceUsd = currentPrice;
+              if (currentPrice < trade.lowestPriceUsd) trade.lowestPriceUsd = currentPrice;
             }
             missingTicks.delete(address); // Reset missing counter
 
@@ -254,6 +269,8 @@ setInterval(async () => {
                 missingTicks.delete(address);
                 if (CONFIG.PAPER_TRADE) {
                   trade.currentPriceUsd *= (1 + (Math.random() * 0.02 - 0.01));
+                  if (trade.currentPriceUsd > trade.highestPriceUsd) trade.highestPriceUsd = trade.currentPriceUsd;
+                  if (trade.currentPriceUsd < trade.lowestPriceUsd) trade.lowestPriceUsd = trade.currentPriceUsd;
                 }
               } else {
                 const ticks = (missingTicks.get(address) || 0) + 1;
@@ -265,6 +282,8 @@ setInterval(async () => {
                   closeSinglePosition(address);
                 } else if (CONFIG.PAPER_TRADE) {
                   trade.currentPriceUsd *= (1 + (Math.random() * 0.02 - 0.01));
+                  if (trade.currentPriceUsd > trade.highestPriceUsd) trade.highestPriceUsd = trade.currentPriceUsd;
+                  if (trade.currentPriceUsd < trade.lowestPriceUsd) trade.lowestPriceUsd = trade.currentPriceUsd;
                 }
               }
             }
@@ -285,6 +304,8 @@ setInterval(async () => {
         }
         if (CONFIG.PAPER_TRADE) {
           trade.currentPriceUsd *= (1 + (Math.random() * 0.02 - 0.01));
+          if (trade.currentPriceUsd > trade.highestPriceUsd) trade.highestPriceUsd = trade.currentPriceUsd;
+          if (trade.currentPriceUsd < trade.lowestPriceUsd) trade.lowestPriceUsd = trade.currentPriceUsd;
         }
       }
     }
@@ -311,9 +332,12 @@ export async function checkGlobalLimits() {
     
     tradesArray.push({
       address: trade.tokenAddress,
+      symbol: trade.tokenSymbol || '',
       amountRaw: trade.amountRaw,
       entryPriceUsd: trade.entryPriceUsd,
       currentPriceUsd: trade.currentPriceUsd,
+      highestPriceUsd: trade.highestPriceUsd || trade.entryPriceUsd,
+      lowestPriceUsd: trade.lowestPriceUsd || trade.entryPriceUsd,
     });
   }
 
@@ -478,9 +502,12 @@ export async function massCloseAll() {
   // Re-render the dashboard
   const remainingTrades = Array.from(activeTrades.values()).map(t => ({
     address: t.tokenAddress,
+    symbol: t.tokenSymbol || '',
     amountRaw: t.amountRaw,
     entryPriceUsd: t.entryPriceUsd,
     currentPriceUsd: t.currentPriceUsd,
+    highestPriceUsd: t.highestPriceUsd || t.entryPriceUsd,
+    lowestPriceUsd: t.lowestPriceUsd || t.entryPriceUsd,
   }));
   updatePinnedDashboard(remainingTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
 }

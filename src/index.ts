@@ -31,7 +31,7 @@ async function main() {
   // Start Scanner
   startScanner((token) => {
     if (isShuttingDown) return;
-    onTokenEntry(token.address, token.priceUsd, token.liquidityUsd);
+    onTokenEntry(token.address, token.symbol, token.priceUsd, token.liquidityUsd);
   });
 }
 

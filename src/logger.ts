@@ -17,9 +17,12 @@ export const COLORS = {
 
 export interface PinnedTradeInfo {
   address: string;
+  symbol: string;
   amountRaw: number;
   entryPriceUsd: number;
   currentPriceUsd: number;
+  highestPriceUsd: number;
+  lowestPriceUsd: number;
 }
 
 let lastPinnedLinesCount = 0;
@@ -94,7 +97,32 @@ export function updatePinnedDashboard(
   const totalColor = totalPnL >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
   const totalSign = totalPnL >= 0 ? '+' : '';
   
-  const text = `Open: ${COLORS.WHITE}${trades.length}${COLORS.RESET} | Unrealize: ${unrealizeColor}${unrealizeSign}$${unrealize.toFixed(2)}${COLORS.RESET} | Realise: ${realiseColor}${realiseSign}$${realise.toFixed(2)}${COLORS.RESET} | Net: ${netColor}${netSign}$${net.toFixed(2)}${COLORS.RESET} | Fee: ${feeColor}$${fee.toFixed(2)}${COLORS.RESET} | Total PnL: ${totalColor}${totalSign}$${totalPnL.toFixed(2)}${COLORS.RESET} | Balance: ${COLORS.BRIGHT_YELLOW}${walletBalanceSol.toFixed(4)} SOL${COLORS.RESET}\n`;
+  // Format dynamic active positions list showing deviation (high / low)
+  let positionsList = '';
+  if (trades.length > 0) {
+    positionsList += `${COLORS.CYAN}--- Active Positions ---${COLORS.RESET}\n`;
+    for (const trade of trades) {
+      const pnlPct = ((trade.currentPriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100;
+      const highPct = ((trade.highestPriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100;
+      const lowPct = ((trade.lowestPriceUsd - trade.entryPriceUsd) / trade.entryPriceUsd) * 100;
+      
+      const pnlColor = pnlPct >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+      const highColor = highPct >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+      const lowColor = lowPct >= 0 ? COLORS.BRIGHT_GREEN : COLORS.BRIGHT_RED;
+      
+      const pnlSign = pnlPct >= 0 ? '+' : '';
+      const highSign = highPct >= 0 ? '+' : '';
+      const lowSign = lowPct >= 0 ? '+' : '';
+      
+      const addrTrunc = trade.address.slice(0, 4) + '...' + trade.address.slice(-4);
+      const label = trade.symbol ? `${trade.symbol.toUpperCase()} (${addrTrunc})` : addrTrunc;
+      
+      positionsList += ` • ${COLORS.WHITE}${label}${COLORS.RESET} -> PnL: ${pnlColor}${pnlSign}${pnlPct.toFixed(1)}%${COLORS.RESET} | High: ${highColor}${highSign}${highPct.toFixed(1)}%${COLORS.RESET} | Low: ${lowColor}${lowSign}${lowPct.toFixed(1)}%${COLORS.RESET}\n`;
+    }
+    positionsList += `${COLORS.CYAN}------------------------${COLORS.RESET}\n`;
+  }
+
+  const text = `${positionsList}Open: ${COLORS.WHITE}${trades.length}${COLORS.RESET} | Unrealize: ${unrealizeColor}${unrealizeSign}$${unrealize.toFixed(2)}${COLORS.RESET} | Realise: ${realiseColor}${realiseSign}$${realise.toFixed(2)}${COLORS.RESET} | Net: ${netColor}${netSign}$${net.toFixed(2)}${COLORS.RESET} | Fee: ${feeColor}$${fee.toFixed(2)}${COLORS.RESET} | Total PnL: ${totalColor}${totalSign}$${totalPnL.toFixed(2)}${COLORS.RESET} | Balance: ${COLORS.BRIGHT_YELLOW}${walletBalanceSol.toFixed(4)} SOL${COLORS.RESET}\n`;
   
   currentPinnedBlockText = text;
   reprintPinnedBlock();
