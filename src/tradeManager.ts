@@ -1,6 +1,6 @@
 import { executeBuy, executeSell, getWalletTokenBalance, getTransactionFeeUsd, getWalletSOLBalance, cachedSolPrice } from './executor';
 import { CONFIG } from './config';
-import { logger, updatePinnedDashboard } from './logger';
+import { logger, updatePinnedDashboard, PinnedClosedTradeInfo } from './logger';
 import * as fs from 'fs';
 import * as path from 'path';
 import axios from 'axios';
@@ -24,6 +24,7 @@ export let totalRealizedPnL = 0;
 export let totalFeesUsd = 0;
 export let walletBalanceSol = 0;
 export let sessionRealizedPnL = 0;
+export const recentClosedTrades: PinnedClosedTradeInfo[] = [];
 
 const logFilePath = path.resolve(__dirname, '../trades.log');
 const activeTradesFilePath = path.resolve(__dirname, '../active_trades.json');
@@ -181,7 +182,7 @@ const missingTicks = new Map<string, number>();
 // Price tracking via Jupiter API (with DexScreener fallback)
 setInterval(async () => {
   if (activeTrades.size === 0) {
-    updatePinnedDashboard([], totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
+    updatePinnedDashboard([], recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
     return;
   }
 
@@ -342,7 +343,7 @@ export async function checkGlobalLimits() {
   }
 
   // Update pinned dashboard feed (with both total and session realized PnL)
-  updatePinnedDashboard(tradesArray, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
+  updatePinnedDashboard(tradesArray, recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
 
   // Rolling Session Net P&L: includes open unrealized P&L + active session realized P&L
   const sessionNetPnlUsd = totalUnrealizedUsd + sessionRealizedPnL;
@@ -353,16 +354,18 @@ export async function checkGlobalLimits() {
     
     // Reset unrealize, realise, and net back to $0 on hit
     sessionRealizedPnL = 0;
+    recentClosedTrades.length = 0;
     saveSessionStats();
-    logger.info('MANAGER', 'Reset Unrealize, Realise, and Net P&L to $0 after Take Profit hit.');
+    logger.info('MANAGER', 'Reset Unrealize, Realise, Net P&L, and Closed Trades list to $0/empty after Take Profit hit.');
   } else if (sessionNetPnlUsd <= -CONFIG.GLOBAL_SL_USD) {
     logger.alert('MANAGER', `[SL HIT] Global Stop Loss ($${CONFIG.GLOBAL_SL_USD}) HIT! (Net PnL: $${sessionNetPnlUsd.toFixed(2)}) Mass closing...`);
     await massCloseAll();
     
     // Reset unrealize, realise, and net back to $0 on hit
     sessionRealizedPnL = 0;
+    recentClosedTrades.length = 0;
     saveSessionStats();
-    logger.info('MANAGER', 'Reset Unrealize, Realise, and Net P&L to $0 after Stop Loss hit.');
+    logger.info('MANAGER', 'Reset Unrealize, Realise, Net P&L, and Closed Trades list to $0/empty after Stop Loss hit.');
   }
 }
 
@@ -418,6 +421,19 @@ export async function closeSinglePosition(address: string) {
         txHash: res.txHash,
         isBurn: res.isBurn
       }) + '\n');
+
+      // Track closed trade for dashboard
+      recentClosedTrades.push({
+        address: trade.tokenAddress,
+        symbol: trade.tokenSymbol || '',
+        entryPriceUsd: trade.entryPriceUsd,
+        exitPriceUsd: exitPriceUsd,
+        highestPriceUsd: trade.highestPriceUsd || trade.entryPriceUsd,
+        lowestPriceUsd: trade.lowestPriceUsd || trade.entryPriceUsd,
+      });
+      if (recentClosedTrades.length > 5) {
+        recentClosedTrades.shift();
+      }
 
       activeTrades.delete(address);
       saveActiveTrades();
@@ -481,6 +497,19 @@ export async function massCloseAll() {
               isBurn: res.isBurn
             }) + '\n');
 
+            // Track closed trade for dashboard
+            recentClosedTrades.push({
+              address: trade.tokenAddress,
+              symbol: trade.tokenSymbol || '',
+              entryPriceUsd: trade.entryPriceUsd,
+              exitPriceUsd: exitPriceUsd,
+              highestPriceUsd: trade.highestPriceUsd || trade.entryPriceUsd,
+              lowestPriceUsd: trade.lowestPriceUsd || trade.entryPriceUsd,
+            });
+            if (recentClosedTrades.length > 5) {
+              recentClosedTrades.shift();
+            }
+
             // Only delete from activeTrades if successfully sold on-chain
             activeTrades.delete(address);
             saveActiveTrades();
@@ -509,5 +538,5 @@ export async function massCloseAll() {
     highestPriceUsd: t.highestPriceUsd || t.entryPriceUsd,
     lowestPriceUsd: t.lowestPriceUsd || t.entryPriceUsd,
   }));
-  updatePinnedDashboard(remainingTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
+  updatePinnedDashboard(remainingTrades, recentClosedTrades, totalRealizedPnL, sessionRealizedPnL, totalFeesUsd, walletBalanceSol);
 }
