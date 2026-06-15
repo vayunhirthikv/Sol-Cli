@@ -1,4 +1,4 @@
-import { executeBuy, executeSell, getWalletTokenBalance, getTransactionFeeUsd, getWalletSOLBalance, cachedSolPrice } from './executor';
+import { executeBuy, executeSell, getWalletTokenBalance, getTransactionFeeUsd, getWalletSOLBalance, cachedSolPrice, confirmTransactionHash, closeTokenAccountIfEmpty } from './executor';
 import { CONFIG } from './config';
 import { logger, updatePinnedDashboard, PinnedClosedTradeInfo } from './logger';
 import * as fs from 'fs';
@@ -141,6 +141,14 @@ export async function onTokenEntry(tokenAddress: string, symbol: string, priceUs
       return;
     }
 
+    // Confirm the buy transaction landed successfully on-chain before tracking
+    const confirmed = await confirmTransactionHash(txHash);
+    if (!confirmed) {
+      logger.error('MANAGER', `Buy transaction failed on-chain for ${tokenAddress}. TX: ${txHash}. Skipping trade.`);
+      pendingEntries.delete(tokenAddress);
+      return;
+    }
+
     // Track fee asynchronously in the background
     getTransactionFeeUsd(txHash).then(fee => {
       totalFeesUsd += fee;
@@ -273,13 +281,13 @@ setInterval(async () => {
             if (trade.currentLiquidityUsd < deadPoolLiq && !isGracePeriod) {
               logger.alert('MANAGER', `[RUG DETECTED] Liquidity for ${address} is dead ($${trade.currentLiquidityUsd.toFixed(0)} < $${deadPoolLiq})! Closing position...`);
               trade.currentPriceUsd = 0.000001; // Force exit at loss
-              closeSinglePosition(address);
+              await closeSinglePosition(address);
             } else if (trade.entryLiquidityUsd > 0 && !isGracePeriod) {
               const liqDrop = ((trade.entryLiquidityUsd - trade.currentLiquidityUsd) / trade.entryLiquidityUsd) * 100;
               if (liqDrop > liqDropPctThreshold) {
                 logger.alert('MANAGER', `[LIQUIDITY DROP] Liquidity for ${address} dropped by ${liqDrop.toFixed(1)}% (Threshold: ${liqDropPctThreshold}%)! Closing position...`);
                 trade.currentPriceUsd = 0.000001;
-                closeSinglePosition(address);
+                await closeSinglePosition(address);
               }
             }
           } else {
@@ -296,10 +304,11 @@ setInterval(async () => {
                 const ticks = (missingTicks.get(address) || 0) + 1;
                 missingTicks.set(address, ticks);
 
-                if (ticks >= 5) {
-                  logger.alert('MANAGER', `Paper Trade Rug/Missing detected for ${address}! Closing position...`);
+                const maxMissingTicks = CONFIG.PAPER_TRADE ? 5 : 15;
+                if (ticks >= maxMissingTicks) {
+                  logger.alert('MANAGER', `[RUG/MISSING] Token ${address} missing from all price feeds for ${ticks}s! Closing position...`);
                   trade.currentPriceUsd = 0.000001;
-                  closeSinglePosition(address);
+                  await closeSinglePosition(address);
                 } else if (CONFIG.PAPER_TRADE) {
                   trade.currentPriceUsd *= (1 + (Math.random() * 0.02 - 0.01));
                   if (trade.currentPriceUsd > trade.highestPriceUsd) trade.highestPriceUsd = trade.currentPriceUsd;
@@ -467,6 +476,9 @@ export async function closeSinglePosition(address: string) {
 
       activeTrades.delete(address);
       saveActiveTrades();
+
+      // Recover rent from empty token account (best-effort, non-blocking)
+      closeTokenAccountIfEmpty(trade.tokenAddress).catch(() => {});
     } else {
       logger.error('MANAGER', `Failed to close position for ${address}. Keeping in active trades.`);
     }
@@ -543,6 +555,9 @@ export async function massCloseAll() {
             // Only delete from activeTrades if successfully sold on-chain
             activeTrades.delete(address);
             saveActiveTrades();
+
+            // Recover rent from empty token account (best-effort, non-blocking)
+            closeTokenAccountIfEmpty(trade.tokenAddress).catch(() => {});
           } else {
             logger.error('MANAGER', `Failed to close position for ${address}. Keeping in active trades.`);
           }

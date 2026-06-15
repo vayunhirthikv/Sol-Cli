@@ -32,7 +32,7 @@ export const CONFIG = {
   DEAD_POOL_LIQUIDITY_USD: 1000,
   LIQUIDITY_DROP_PCT_THRESHOLD: 50,
   SLIPPAGE_BPS: 500, // 5%
-  EXIT_SLIPPAGE_BPS: 1500, // 15% exit slippage to guarantee execution
+  EXIT_SLIPPAGE_BPS: 10000, // 15% exit slippage to guarantee execution
   MIN_SOL_BALANCE: 0.01, // Minimum SOL balance for gas/buys
   PRIORITY_FEE_MODE: process.env.PRIORITY_FEE_MODE || 'auto', // 'auto' or a number (lamports)
 };

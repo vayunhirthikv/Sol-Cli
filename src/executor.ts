@@ -25,7 +25,6 @@ const WSOL_ADDRESS = 'So11111111111111111111111111111111111111112';
 export let cachedSolPrice = 150;
 
 export async function fetchSolPriceBg() {
-  if (CONFIG.PAPER_TRADE) return;
   try {
     const headers: Record<string, string> = {};
     if (CONFIG.JUPITER_API_KEY) {
@@ -166,28 +165,6 @@ async function executeSwapInstructions(inputMint: string, outputMint: string, am
     // Add Cleanup (unwrap SOL)
     if (cleanupInstruction) allInstructions.push(deserializeInstruction(cleanupInstruction));
 
-    // ── RENT RECOVERY (REAL IMPLEMENTATION) ──
-    if (isSell) {
-      try {
-        const ata = getAssociatedTokenAddressSync(
-          new PublicKey(inputMint),
-          wallet.publicKey,
-          false,
-          TOKEN_PROGRAM_ID
-        );
-        allInstructions.push(
-          createCloseAccountInstruction(
-            ata,
-            wallet.publicKey, // Rent refund destination
-            wallet.publicKey, // Owner of account
-            []
-          )
-        );
-        logger.info('EXECUTOR', `[RENT] Attached Rent Recovery (CloseAccount) Instruction for ${inputMint}`);
-      } catch (err: any) {
-        logger.error('EXECUTOR', `[RENT] Failed to attach Rent Recovery: ${err.message}`);
-      }
-    }
 
     // 3. Address Lookup Tables (ALT)
     const getAddressLookupTableAccounts = async (keys: string[]) => {
@@ -427,5 +404,58 @@ export async function getWalletSOLBalance(): Promise<number> {
   } catch (err: any) {
     logger.error('EXECUTOR', `Failed to fetch wallet SOL balance: ${err.message}`);
     return 0;
+  }
+}
+
+/**
+ * Confirm a transaction landed successfully on-chain.
+ * Returns true if confirmed without error, false otherwise.
+ */
+export async function confirmTransactionHash(txHash: string): Promise<boolean> {
+  if (CONFIG.PAPER_TRADE || txHash.startsWith('paper_')) return true;
+  try {
+    const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+    const result = await connection.confirmTransaction({
+      signature: txHash,
+      blockhash: latestBlockhash.blockhash,
+      lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+    }, 'confirmed');
+    return !result.value.err;
+  } catch (err: any) {
+    logger.error('EXECUTOR', `Transaction confirmation failed for ${txHash}: ${err.message}`);
+    return false;
+  }
+}
+
+/**
+ * Close a token account if it has zero balance, recovering ~0.002 SOL rent.
+ * Best-effort — failures are logged but do not throw.
+ */
+export async function closeTokenAccountIfEmpty(tokenAddress: string): Promise<void> {
+  if (CONFIG.PAPER_TRADE) return;
+  try {
+    const mintPubkey = new PublicKey(tokenAddress);
+    const ata = getAssociatedTokenAddressSync(mintPubkey, wallet.publicKey, false, TOKEN_PROGRAM_ID);
+
+    const balanceInfo = await connection.getTokenAccountBalance(ata, 'confirmed');
+    const balance = Number(balanceInfo.value.amount);
+
+    if (balance === 0) {
+      const closeIx = createCloseAccountInstruction(ata, wallet.publicKey, wallet.publicKey, []);
+      const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+      const messageV0 = new TransactionMessage({
+        payerKey: wallet.publicKey,
+        recentBlockhash: latestBlockhash.blockhash,
+        instructions: [closeIx],
+      }).compileToV0Message([]);
+      const tx = new VersionedTransaction(messageV0);
+      tx.sign([wallet]);
+      await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true, maxRetries: 2 });
+      logger.info('EXECUTOR', `[RENT] Recovered rent for ${tokenAddress}`);
+    } else {
+      logger.warn('EXECUTOR', `[RENT] Token account for ${tokenAddress} has ${balance} dust remaining. Skipping rent recovery.`);
+    }
+  } catch (err: any) {
+    logger.warn('EXECUTOR', `[RENT] Failed to recover rent for ${tokenAddress}: ${err.message}`);
   }
 }
