@@ -340,6 +340,14 @@ setInterval(async () => {
     }
   }
 
+  // Check max position hold time — auto-exit expired positions at market price
+  for (const [address, trade] of activeTrades.entries()) {
+    if (Date.now() - trade.openedAt >= CONFIG.MAX_POSITION_TIME_MS) {
+      logger.warn('MANAGER', `[TIME LIMIT] ${trade.tokenSymbol || address} exceeded max hold time (${Math.round(CONFIG.MAX_POSITION_TIME_MS / 60000)}min). Closing at market price...`);
+      await closeSinglePosition(address);
+    }
+  }
+
   checkGlobalLimits();
 }, 1000); // Poll every 1 second
 
